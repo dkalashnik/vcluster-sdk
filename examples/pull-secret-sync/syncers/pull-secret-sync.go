@@ -21,20 +21,18 @@ var (
 
 func NewPullSecretSyncer(ctx *synccontext.RegisterContext, destinationNamespace string) syncer.Syncer {
 	return &pullSecretSyncer{
-		hostNamespace: ctx.TargetNamespace,
-
+		hostNamespace:        ctx.TargetNamespace,
 		DestinationNamespace: destinationNamespace,
 	}
 }
 
 type pullSecretSyncer struct {
-	hostNamespace string
-
+	hostNamespace        string
 	DestinationNamespace string
 }
 
 func (s *pullSecretSyncer) Name() string {
-	return "pull-secret-syncer"
+	return constants.PluginName
 }
 
 func (s *pullSecretSyncer) Resource() client.Object {
@@ -60,8 +58,8 @@ var _ syncer.UpSyncer = &pullSecretSyncer{}
 
 func (s *pullSecretSyncer) SyncUp(ctx *synccontext.SyncContext, pObj client.Object) (ctrl.Result, error) {
 	pSecret := pObj.(*corev1.Secret)
-	if pSecret.Type != corev1.SecretTypeDockerConfigJson {
-		// ignore secrets that are not of "pull secret" type
+	ctx.Log.Infof("checking secret %s/%s", pSecret.Namespace, pSecret.Name)
+	if pSecret.Type != corev1.SecretTypeDockerConfigJson && pSecret.Type != corev1.SecretTypeDockercfg {
 		return ctrl.Result{}, nil
 	}
 	if pSecret.GetLabels()[translate.MarkerLabel] != "" {
@@ -84,7 +82,7 @@ func (s *pullSecretSyncer) SyncUp(ctx *synccontext.SyncContext, pObj client.Obje
 		},
 		Immutable: pSecret.Immutable,
 		Data:      pSecret.Data,
-		Type:      corev1.SecretTypeDockerConfigJson,
+		Type:      pSecret.Type,
 	}
 	err := ctx.VirtualClient.Create(ctx.Context, secret)
 	if err == nil {
@@ -97,12 +95,13 @@ func (s *pullSecretSyncer) SyncUp(ctx *synccontext.SyncContext, pObj client.Obje
 
 func (s *pullSecretSyncer) Sync(ctx *synccontext.SyncContext, pObj client.Object, vObj client.Object) (ctrl.Result, error) {
 	pSecret := pObj.(*corev1.Secret)
-	if pSecret.Type != corev1.SecretTypeDockerConfigJson {
+	if pSecret.Type != corev1.SecretTypeDockerConfigJson && pSecret.Type != corev1.SecretTypeDockercfg {
 		if vObj.GetLabels()[ManagedPullSecret] == constants.PluginName {
 			// delete synced secret if the type of a the host secret is no longer a pull secret
 			err := ctx.VirtualClient.Delete(ctx.Context, vObj)
 			if err == nil {
-				ctx.Log.Infof("deleted pull secret %s/%s because host secret is no longer equal to %s", vObj.GetNamespace(), vObj.GetName(), corev1.SecretTypeDockerConfigJson)
+				ctx.Log.Infof("deleted pull secret %s/%s because host secret is no longer equal to %s",
+					vObj.GetNamespace(), vObj.GetName(), corev1.SecretTypeDockerConfigJson)
 			} else {
 				err = fmt.Errorf("failed to delete pull secret %s/%s: %v", vObj.GetNamespace(), vObj.GetName(), err)
 			}
@@ -136,9 +135,11 @@ func (s *pullSecretSyncer) SyncDown(ctx *synccontext.SyncContext, vObj client.Ob
 		// delete synced secret because the host secret was deleted
 		err := ctx.VirtualClient.Delete(ctx.Context, vObj)
 		if err == nil {
-			ctx.Log.Infof("deleted pull secret %s/%s because host secret no longer exists", vObj.GetNamespace(), vObj.GetName())
+			ctx.Log.Infof("deleted pull secret %s/%s because host secret no longer exists",
+				vObj.GetNamespace(), vObj.GetName())
 		} else {
-			err = fmt.Errorf("failed to delete pull secret %s/%s: %v", vObj.GetNamespace(), vObj.GetName(), err)
+			err = fmt.Errorf("failed to delete pull secret %s/%s: %v",
+				vObj.GetNamespace(), vObj.GetName(), err)
 		}
 		return ctrl.Result{}, err
 	}
